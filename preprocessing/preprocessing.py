@@ -422,19 +422,12 @@ def createDensityLayers(Filename_in,
                         nevents, 
                         dimension1, 
                         dimension2, 
-                        counterbranch,
-                        scales=None):
+                        counterbranch):
     
     from DeepJetCore.compiled import c_meanNormZeroPad
     
-    if not scales:
-        norms = [1 for x in range(len(inbranches))]
-    else:
-        norms=scales
-        if not len(scales) == len(inbranches):
-            raise ValueError('Scales length must match number of branches')
             
-    
+    norms = [1 for x in range(len(inbranches))]
     means = [0 for x in range(len(inbranches))]
     
     x_branch, x_center, x_bins, x_width = dimension1
@@ -473,6 +466,9 @@ def MeanNormZeroPadParticles(Filename_in,MeanNormTuple,inbranches,nMax,nevents):
         if MeanNormTuple is None:
             means.append(0)
             norms.append(1)
+        elif numpy.isnan(MeanNormTuple[b][0]) or numpy.isnan(MeanNormTuple[b][1]):
+            means.append(0)
+            norms.append(1)
         else:
             means.append(MeanNormTuple[b][0])
             norms.append(MeanNormTuple[b][1])
@@ -483,6 +479,22 @@ def MeanNormZeroPadParticles(Filename_in,MeanNormTuple,inbranches,nMax,nevents):
     
    
     return array
+def ZeroPadParticles(Filename_in,MeanNormTuple,inbranches,nMax,nevents):
+    from DeepJetCore.compiled import c_meanNormZeroPad
+
+
+    array = numpy.zeros((nevents,nMax,len(inbranches)) , dtype='float32')
+
+    means=[]
+    norms=[]
+    for b in inbranches:
+        means.append(0.)
+        norms.append(1.)
+
+    c_meanNormZeroPad.particlecluster(array,[norms],[means],[inbranches],[nMax],Filename_in)
+
+    return array
+
 
 def MeanNormZeroPad(Filename_in,MeanNormTuple,inbranches_listlist,nMaxslist,nevents):
 

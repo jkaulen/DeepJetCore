@@ -43,16 +43,16 @@ def fileTimeOut(fileName, timeOut):
         time.sleep(1)
 
 
-def _read_arrs_(arrwl,arrxl,arryl,doneVal,fileprefix,tdref=None,randomSeed=None):
+def _read_arrs_(arrwl,arrxl,arryl,arrzl,doneVal,fileprefix,tdref=None,randomSeed=None):
     import gc
     gc.collect()
 
     import h5py
     from sklearn.utils import shuffle
     try:
-        idstrs=['w','x','y']
+        idstrs=['w','x','y','z']
         h5f = h5py.File(fileprefix,'r')
-        alllists=[arrwl,arrxl,arryl]
+        alllists=[arrwl,arrxl,arryl,arrzl]
         for j in range(len(idstrs)):
             fidstr=idstrs[j]
             arl=alllists[j]
@@ -133,6 +133,8 @@ class TrainData(object):
         
         self.remove=True    
         self.weight=False
+        self.ignore_when_weighting=[] #for use with referenceclass='lowest'
+        self.removeUnderOverflow=False
         
         self.clear()
         
@@ -151,14 +153,17 @@ class TrainData(object):
         if hasattr(self, 'x'):
             del self.x
             del self.y
+            del self.z
             del self.w
         if hasattr(self, 'w_list'):
             del self.w_list
             del self.x_list
             del self.y_list
+            del self.z_list
             
         self.x=[numpy.array([])]
         self.y=[numpy.array([])]
+        self.z=[numpy.array([])]
         self.w=[numpy.array([])]
         
         self.nsamples=None
@@ -279,10 +284,12 @@ class TrainData(object):
         _writeoutListinfo(self.w,'w',h5f)
         _writeoutListinfo(self.x,'x',h5f)
         _writeoutListinfo(self.y,'y',h5f)
+        _writeoutListinfo(self.z,'z',h5f)
         
         _writeoutArrays(self.w,'w',h5f)
         _writeoutArrays(self.x,'x',h5f)
         _writeoutArrays(self.y,'y',h5f)
+        _writeoutArrays(self.z,'z',h5f)
         
         h5f.close()
             
@@ -358,11 +365,13 @@ class TrainData(object):
                 self.w_list,self.w_shapes=_readListInfo_('w')
                 self.x_list,self.x_shapes=_readListInfo_('x')
                 self.y_list,self.y_shapes=_readListInfo_('y')
+                self.z_list,self.z_shapes=_readListInfo_('z')
             else:
                 print('\nshape known\n')
                 self.w_list,_=_readListInfo_('w')
                 self.x_list,_=_readListInfo_('x')
                 self.y_list,_=_readListInfo_('y')
+                self.z_list,_=_readListInfo_('z')
                 
             self.h5f.close()
             del self.h5f
@@ -388,6 +397,8 @@ class TrainData(object):
                         shutil.copyfile(filebase+'x.'+str(i),unique_filename+'.x.'+str(i))
                     for i in range(len(self.y_list)):
                         shutil.copyfile(filebase+'y.'+str(i),unique_filename+'.y.'+str(i))
+                    for i in range(len(self.z_list)):
+                        shutil.copyfile(filebase+'z.'+str(i),unique_filename+'.z.'+str(i))
                     unique_filename+='.meta'
                         
                 else:
@@ -405,6 +416,8 @@ class TrainData(object):
                 
             for i in range(len(self.y_list)):
                 self.y_list[i]=self.__createArr(self.y_shapes[i])
+            for i in range(len(self.z_list)):
+                self.z_list[i]=self.__createArr(self.z_shapes[i])
             
             if read_async:
                 self.readdone=multiprocessing.Value('b',False)
@@ -433,13 +446,19 @@ class TrainData(object):
                                                            fileprefix,
                                                            list(self.y_list[i].shape),
                                                            isRamDisk))
-                
+
+                for i in range(len(self.z_list)):
+                    self.readthreadids.append(startReading(self.z_list[i].ctypes.data,
+                                                           filebase+'z.'+str(i),
+                                                           list(self.z_list[i].shape),
+                                                           isRamDisk))  
                 
             else:
                 self.readthread=multiprocessing.Process(target=_read_arrs_, 
                                                         args=(self.w_list,
                                                               self.x_list,
                                                               self.y_list,
+                                                              self.z_list,
                                                               self.readdone,
                                                               readfile,
                                                               self,randomseed))
@@ -467,10 +486,15 @@ class TrainData(object):
                                                            fileprefix,
                                                            list(self.y_list[i].shape),
                                                            isRamDisk))
+                for i in range(len(self.z_list)):
+                    (readBlocking(self.z_list[i].ctypes.data,
+                                                           filebase+'z.'+str(i),
+                                                           list(self.z_list[i].shape),
+                                                           isRamDisk))
                 
             else:
                 self.readdone=multiprocessing.Value('b',False)
-                _read_arrs_(self.w_list,self.x_list,self.y_list,self.readdone,readfile,self,randomseed)
+                _read_arrs_(self.w_list,self.x_list,self.y_list,self.z_list,self.readdone,readfile,self,randomseed)
             
             
         
@@ -540,14 +564,17 @@ class TrainData(object):
                     self.w=self.w_list
                     self.x=self.x_list
                     self.y=self.y_list
+                    self.z=self.z_list
                 else:
                     self.w=copy.deepcopy(self.w_list)
                     self.x=copy.deepcopy(self.x_list)
                     self.y=copy.deepcopy(self.y_list)
+                    self.z=copy.deepcopy(self.z_list)
                     
                 del self.w_list
                 del self.x_list
                 del self.y_list
+                del self.z_list
             #in case of some errors during read-in
             
         except Exception as d:
@@ -569,10 +596,13 @@ class TrainData(object):
             self.x[i]=reshape_fast(self.x[i],self.x_shapes[i])
         for i in range(len(self.y)):
             self.y[i]=reshape_fast(self.y[i],self.y_shapes[i])
+        for i in range(len(self.z)):
+            self.z[i]=reshape_fast(self.z[i],self.z_shapes[i])
         
         self.w_list=None
         self.x_list=None
         self.y_list=None
+        self.z_list=None
         if wasasync and self.readthread:
             self.readthread.terminate()
         self.readthread=None
@@ -585,6 +615,7 @@ class TrainData(object):
             self.w=self.w_list
             self.x=self.x_list
             self.y=self.y_list
+            self.z=self.z_list
         else:
             self.w=copy.deepcopy(self.w_list)
             del self.w_list
@@ -592,6 +623,8 @@ class TrainData(object):
             del self.x_list
             self.y=copy.deepcopy(self.y_list)
             del self.y_list
+            self.z=copy.deepcopy(self.z_list)
+            del self.z_list
         
         def reshape_fast(arr,shapeinfo):
             if len(shapeinfo)<2:
@@ -611,10 +644,13 @@ class TrainData(object):
             self.x[i]=reshape_fast(self.x[i],self.x_shapes[i])
         for i in range(len(self.y)):
             self.y[i]=reshape_fast(self.y[i],self.y_shapes[i])
-        
+        for i in range(len(self.z)):
+            self.z[i]=reshape_fast(self.z[i],self.z_shapes[i])
+            
         self.w_list=None
         self.x_list=None
         self.y_list=None
+        self.z_list=None
         self.readthread=None
         
         
@@ -658,7 +694,7 @@ class TrainData(object):
             print('add files')
         else:    
             fileTimeOut(filenames,120) #give eos a minute to recover
-            rfile = ROOT.TFile(filenames)
+            rfile = ROOT.TFile.Open(filenames)
             tree = rfile.Get(self.treename)
             if not self.nsamples:
                 self.nsamples=tree.GetEntries()
@@ -693,12 +729,14 @@ class TrainData(object):
     def make_empty_weighter(self):
         weighter = Weighter() 
         weighter.undefTruth = self.undefTruth
+        weighter.removeUnderOverflow = self.removeUnderOverflow
+        weighter.ignore_when_weighting = self.ignore_when_weighting
         
         if self.remove or self.weight:
             weighter.setBinningAndClasses(
                 [self.weight_binX,self.weight_binY],
                 self.weightbranchX,self.weightbranchY,
-                self.truthclasses
+                self.reducedtruthclasses
                 )
         return weighter
 
@@ -706,15 +744,30 @@ class TrainData(object):
     def produceBinWeighter(self,filenames):
         weighter = self.make_empty_weighter()
         branches = [self.weightbranchX,self.weightbranchY]
-        branches.extend(self.truthclasses)
+        #branches.extend(self.truthclasses)
         showprog=ShowProgress(5,len(filenames))
         counter=0
         if self.remove or self.weight:
             for fname in filenames:
-                fileTimeOut(fname, 120)
-                nparray = self.readTreeFromRootToTuple(fname, branches=branches)
-                weighter.addDistributions(nparray)
-                #del nparray
+                # Read truths 
+                truth_array = self.readTreeFromRootToTuple(fname, branches=self.truthclasses)
+                # Use defined reduced truths
+                reduced_array = self.reduceTruth(truth_array)
+                dtype = zip(self.reducedtruthclasses, [col.dtype for col in reduced_array.transpose()])
+                reduced_array = reduced_array.ravel().view(dtype)		
+                # Read variables to weight along
+                weight_along_array = self.readTreeFromRootToTuple(fname, branches=branches)
+                # Merge two arrays
+                import numpy.lib.recfunctions as rfn
+                nparray = rfn.merge_arrays([reduced_array, weight_along_array],  flatten = True, usemask = False)
+
+               	weighter.addDistributions(nparray, referenceclass=self.referenceclass) 
+                del nparray
+                del truth_array
+                del weight_along_array
+                del reduced_array
+            
+
                 showprog.show(counter)
                 counter=counter+1
             weighter.createRemoveProbabilitiesAndWeights(self.referenceclass)
@@ -731,6 +784,7 @@ class TrainData(object):
         elif self.remove:
             x_in=self.x
             y_in=self.y
+            z_in=self.z
             for i in range(oversample):
                 notremoves=weighter.createNotRemoveIndices(npy_array)
                 if self.undefTruth:
@@ -743,10 +797,11 @@ class TrainData(object):
                 if not i:
                     self.x = [x[notremoves > 0] for x in x_in]
                     self.y = [y[notremoves > 0] for y in y_in]
+                    self.z = [z[notremoves > 0] for z in z_in]
                 else:
                     self.x = [self.x[i].concatenate(x_in[i][notremoves > 0]) for i in range(len(self.x))]
                     self.y = [self.y[i].concatenate(y_in[i][notremoves > 0]) for i in range(len(self.y))]
-                    
+                    self.z = [self.z[i].concatenate(z_in[i][notremoves > 0]) for i in range(len(self.z))]
             self.w = [numpy.zeros(self.x[0].shape)+1 for _ in self.y]
                     
                 

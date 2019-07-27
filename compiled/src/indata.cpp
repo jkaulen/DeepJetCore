@@ -52,6 +52,7 @@ indata::~indata(){
 
 float indata::getData(const size_t& b,const size_t& i){
     float ret= buffer.at(b)[i];
+    if (std::isnan(ret)) { ret=0;}; 
     if(doscaling){
         ret -= means.at(b);
         ret /= norms.at(b);

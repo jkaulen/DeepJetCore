@@ -29,7 +29,9 @@ class Weighter(object):
         self.classes=[]
         self.refclassidx=0
         self.undefTruth=[]
-    
+    	self.ignore_when_weighting=[]
+        self.removeUnderOverflow=False
+        
     def __eq__(self, other):
         'A == B'
         def _all(x):
@@ -73,7 +75,7 @@ class Weighter(object):
         if len(self.classes)<1:
             self.classes=['']
         
-    def addDistributions(self,Tuple):
+    def addDistributions(self,Tuple, referenceclass="flatten"):
         selidxs=[]
         
         ytuple=Tuple[self.nameY]
@@ -90,7 +92,11 @@ class Weighter(object):
             
         
         for i in range(len(self.classes)):
-            tmphist,xe,ye=np.histogram2d(xtuple[selidxs[i]],ytuple[selidxs[i]],[self.axisX,self.axisY],normed=True)
+            if not referenceclass=="lowest": 
+                tmphist,xe,ye=np.histogram2d(xtuple[selidxs[i]],ytuple[selidxs[i]],[self.axisX,self.axisY],normed=True)
+            else:
+                tmphist,xe,ye=numpy.histogram2d(xtuple[selidxs[i]],ytuple[selidxs[i]],[self.axisX,self.axisY])
+            #print(self.classes[i], xtuple[selidxs[i]], len(xtuple[selidxs[i]]))
             self.xedges=xe
             self.yedges=ye
             if len(self.distributions)==len(self.classes):
@@ -126,7 +132,7 @@ class Weighter(object):
         
     def createRemoveProbabilitiesAndWeights(self,referenceclass='isB'):
         referenceidx=-1
-        if not referenceclass=='flatten':
+        if referenceclass not in ['flatten', 'lowest']:
             try:
                 referenceidx=self.classes.index(referenceclass)
             except:
@@ -161,30 +167,37 @@ class Weighter(object):
         probhists=[]
         weighthists=[]
         
+        bin_counts = []
         for i in range(len(self.classes)):
-            #print(self.classes[i])
+            if self.classes[i] in self.ignore_when_weighting:  continue
+            bin_counts.append(self.distributions[i])
+        bin_min = np.array(np.minimum.reduce(bin_counts))
+        for i in range(len(self.classes)):
             tmphist=self.distributions[i]
-            #print(tmphist)
-            #print(refhist)
-            if np.amax(tmphist):
-                tmphist=tmphist/np.amax(tmphist)
+            if referenceclass=="lowest": 
+                ratio=divideHistos(bin_min,tmphist)
             else:
-                print('Warning: class '+self.classes[i]+' empty.')
-            ratio=divideHistos(refhist,tmphist)
-            ratio=ratio/np.amax(ratio)#norm to 1
-            #print(ratio)
+            	if np.amax(tmphist):
+                	tmphist=tmphist/np.amax(tmphist)
+                else:
+                	print('Warning: class '+self.classes[i]+' empty.')
+                ratio=divideHistos(refhist,tmphist)
+                ratio=ratio/np.amax(ratio)#norm to 1
+
             ratio[ratio<0]=1
             ratio[ratio==np.nan]=1
             weighthists.append(ratio)
-            ratio=1-ratio#make it a remove probability
-            probhists.append(ratio)
-        
+            probhists.append(1-ratio)
+        print ("Weights:")
+        np.set_printoptions(precision=3, suppress=True)
+        print(["Min evts per bin"] + self.classes)
+        print(np.column_stack(tuple([bin_min] + weighthists))) 
         self.removeProbabilties=probhists
         self.binweights=weighthists
         
         #make it an average 1
-        for i in range(len(self.binweights)):
-            self.binweights[i]=self.binweights[i]/np.average(self.binweights[i])
+        #for i in range(len(self.binweights)):
+        #    self.binweights[i]=self.binweights[i]/np.average(self.binweights[i])
     
     
         
@@ -201,6 +214,7 @@ class Weighter(object):
         xaverage=[]
         norm=[]
         yaverage=[]
+        count_out, count_rem = 0, 0
         
         useonlyoneclass=len(self.classes)==1 and len(self.classes[0])==0
         
@@ -210,19 +224,23 @@ class Weighter(object):
             yaverage.append(0)
             
         
-
+        incomplete_class_phasespace = False
         for jet in iter(Tuple[self.Axixandlabel]):
             binX =  self.getBin(jet[self.nameX], self.axisX)
             binY =  self.getBin(jet[self.nameY], self.axisY)
-            
+            out, rem = False, False
             for index, classs in enumerate(self.classes):
                 if  useonlyoneclass or 1 == jet[classs]:
                     rand=np.random.ranf()
                     prob = self.removeProbabilties[index][binX][binY]
                     
-                    if rand < prob and index != self.refclassidx:
-                        #print('rm  ',index,self.refclassidx,jet[classs],classs)
+                    if self.removeUnderOverflow and (jet[self.nameX] < self.axisX[0] or jet[self.nameY] < self.axisY[0] or jet[self.nameX] > self.axisX[-1] or jet[self.nameY] > self.axisY[-1]):
+                        #print("over/underflow")
+                        out = True
                         notremove[counter]=0
+                    elif rand < prob and index != self.refclassidx:
+                        notremove[counter]=0
+                        rem = True
                     else:
                         #print('keep',index,self.refclassidx,jet[classs],classs)
                         notremove[counter]=1
@@ -231,21 +249,24 @@ class Weighter(object):
                         norm[index]+=1
             
                     counter += 1
-                    break
-            else:
-                counter += 1
+                elif sum([jet[classs] for classs in self.classes])==0:
+                    notremove[counter]=0
+                    counter +=1
+                    incomplete_class_phasespace = True
+            if out: count_out +=1
+            if rem: count_rem +=1
+        print('Under/Overflow:  {} % , Randomly removed: {} %'.format(round(count_out/float(counter)*100), round(count_rem/float(counter)*100)) )
         
-            
+        if incomplete_class_phasespace:
+            print("WARNING: Defined truth classes don't sum up to 1 in probability")
         if not len(notremove) == counter:
             raise Exception("tuple length must match remove indices length. Probably a problem with the definition of truth classes in the ntuple and the TrainData class")
-        
         
         return notremove
 
     
         
     def getJetWeights(self,Tuple):
-        countMissedJets = 0  
         if len(self.binweights) <1:
             raise Exception('weight bins not initialised. Cannot create weights per jet')
         
@@ -253,19 +274,40 @@ class Weighter(object):
         jetcount=0
         
         useonlyoneclass=len(self.classes)==1 and len(self.classes[0])==0
+        count_out = 0
+        count_undef = 0
         
         for jet in iter(Tuple[self.Axixandlabel]):
-
             binX =  self.getBin(jet[self.nameX], self.axisX)
             binY =  self.getBin(jet[self.nameY], self.axisY)
-            
+            out=False
             for index, classs in enumerate(self.classes):
                 if 1 == jet[classs] or useonlyoneclass:
-                    weight[jetcount]=(self.binweights[index][binX][binY])
+                    jet_out_of_range = (jet[self.nameX] < self.axisX[0] or jet[self.nameY] < self.axisY[0] or jet[self.nameX] > self.axisX[-1] or jet[self.nameY] > self.axisY[-1])
+                    #if self.removeUnderOverflow and (jet[self.nameX] < self.axisX[0] or jet[self.nameY] < self.axisY[0] or jet[self.nameX] > self.axisX[-1] or jet[self.nameY] > self.axisY[-1]):
+                    if self.removeUnderOverflow and jet_out_of_range:
+                    	weight[jetcount]=0
+                        out = True
+                    else:
+                        weight[jetcount]=(self.binweights[index][binX][binY])
+                #else: 
+                #    	weight[jetcount]=0
                     
+            if sum([jet[classs] for classs in self.classes])==0:
+                incomplete_class_phasespace = True
+                count_undef += 1
+            if out: count_out +=1
             jetcount=jetcount+1        
 
-        print ('weight average: ',weight.mean())
+        if self.removeUnderOverflow: print('Under/Overflow:  {} % '.format(round(count_out/float(jetcount)*100,2)))
+        if count_undef > 0: 
+            print("WARNING: Defined truth classes don't sum up to 1 in probability")
+            print('Undefined:  {} % '.format(round(count_undef/float(jetcount)*100,2)))
+
+            print('Weight average: ',weight.mean())
+            print('Weight average (non-zero-only): ',weight[weight > 0].mean())
+            print('Fraction of 0 weights: ', len(weight[weight == 0])/float(len(weight)))
+        
         return weight
         
         

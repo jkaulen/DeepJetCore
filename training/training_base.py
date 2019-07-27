@@ -73,27 +73,30 @@ class training_base(object):
 				useweights=False, testrun=False,
                 testrun_fraction=0.1,
 				resumeSilently=False, 
-				renewtokens=True,
+				renewtokens=False,
 				collection_class=DataCollection,
-				parser=None,
-                recreate_silently=False
+				parser=None
 				):
         
         import sys
         scriptname=sys.argv[0]
         
-        if parser is None: parser = ArgumentParser('Run the training')
-        parser.add_argument('inputDataCollection')
-        parser.add_argument('outputDir')
-        parser.add_argument('--modelMethod', help='Method to be used to instantiate model in derived training class', metavar='OPT', default=None)
-        parser.add_argument("--gpu",  help="select specific GPU", metavar="OPT", default=-1)
-        parser.add_argument("--gpufraction",  help="select memory fraction for GPU",   type=float, metavar="OPT", default=-1)
-        parser.add_argument("--submitbatch",  help="submits the job to condor" , default=False, action="store_true")
-        parser.add_argument("--walltime",  help="sets the wall time for the batch job, format: 1d5h or 2d or 3h etc" , default='1d')
-        parser.add_argument("--isbatchrun",   help="is batch run", default=False, action="store_true")
+        if parser is None: 
+            parser = ArgumentParser('Run the training')
+            parser.add_argument('inputDataCollection')
+            parser.add_argument('outputDir')
+            parser.add_argument('--modelMethod', help='Method to be used to instantiate model in derived training class', metavar='OPT', default=None)
+            parser.add_argument("--gpu",  help="select specific GPU", metavar="OPT", default=-1)
+            parser.add_argument("--gpufraction",  help="select memory fraction for GPU",   type=float, metavar="OPT", default=-1)
+            parser.add_argument("--submitbatch",  help="submits the job to condor" , default=False, action="store_true")
+            parser.add_argument("--walltime",  help="sets the wall time for the batch job, format: 1d5h or 2d or 3h etc" , default='1d')
+            parser.add_argument("--isbatchrun",   help="is batch run", default=False, action="store_true")
         
         
-        args = parser.parse_args()
+            args = parser.parse_args()
+        else:
+            args=parser
+        
         self.args = args
         import sys
         self.argstring = sys.argv
@@ -171,7 +174,7 @@ class training_base(object):
         isNewTraining=True
         if os.path.isdir(self.outputDir):
             if not (resumeSilently or recreate_silently):
-                var = raw_input('output dir exists. To recover a training, please type "yes"\n')
+                var = raw_input('Output dir exists. To recover a training, please type "yes"\n')
                 if not var == 'yes':
                     raise Exception('output directory must not exists yet')
             isNewTraining=False
@@ -233,12 +236,14 @@ class training_base(object):
     def modelSet(self):
         return not self.keras_model==None
         
-    def setModel(self,model,**modelargs):
+    def setModel(self,model,datasets = None, removedVars = None,**modelargs):
         if len(self.keras_inputs)<1:
             raise Exception('setup data first') 
         self.keras_model=model(self.keras_inputs,
                                self.train_data.getNClassificationTargets(),
                                self.train_data.getNRegressionTargets(),
+                               datasets,
+                               removedVars,
                                **modelargs)
         if not self.keras_model:
             raise Exception('Setting model not successful') 
@@ -279,6 +284,8 @@ class training_base(object):
         self.compiled=True
         if self.ngpus>1:
             self.compiled=False
+    def loadWeights(self,filename):
+        self.keras_model.load_weights(filename, by_name=True)   
         
     def setCustomOptimizer(self,optimizer):
         self.optimizer = optimizer
@@ -444,6 +451,9 @@ class training_base(object):
         print('setting up callbacks')
         from .DeepJet_callbacks import DeepJet_callbacks
         
+        minTokenLifetime=5
+        if self.renewtokens==False:
+            minTokenLifetime=0
         
         self.callbacks=DeepJet_callbacks(self.keras_model,
                                     stop_patience=stop_patience, 
@@ -453,6 +463,7 @@ class training_base(object):
                                     lr_cooldown=lr_cooldown, 
                                     lr_minimum=lr_minimum,
                                     outputDir=self.outputDir,
+                                    minTokenLifetime=minTokenLifetime,
                                     checkperiod=checkperiod,
                                     checkperiodoffset=self.trainedepoches,
                                     additional_plots=additional_plots)
@@ -463,13 +474,17 @@ class training_base(object):
             self.callbacks.callbacks.extend(additional_callbacks)
         
         print('starting training')
+        if keras.__version__=='2.0.0':
+            trainargs.update({'max_q_size':maxqsize})
+        else:
+            trainargs.update({'max_queue_size':maxqsize})
         self.keras_model.fit_generator(self.train_data.generator() ,
                             steps_per_epoch=self.train_data.getNBatchesPerEpoch(), 
                             epochs=nepochs-self.trainedepoches,
                             callbacks=self.callbacks.callbacks,
                             validation_data=self.val_data.generator(),
                             validation_steps=self.val_data.getNBatchesPerEpoch(), #)#,
-                            max_q_size=maxqsize,**trainargs)
+                            **trainargs)
         
         self.trainedepoches=nepochs
         self.saveModel("KERAS_model.h5")
